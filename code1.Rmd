@@ -1,0 +1,197 @@
+---
+title: "Untitled"
+author: "Jiayi Zhu"
+date: "2024-11-15"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r}
+data <- read.csv("/Users/zhujiayi/Desktop/car_data.csv", header = TRUE)
+
+
+data$car_name <- gsub(" .*", "", data$car_name)
+categorical_vars <- c("car_name", "year", "A.C", "emission_class", "seats_amount", "color", 
+                      "type_of_drive", "doors", "fuel", "car_type", "gearbox")
+data[categorical_vars] <- lapply(data[categorical_vars], as.factor)
+data$horsepower <- as.numeric(sub(" HP.*", "", data$horsepower))
+
+
+## Build model of main effects without interaction
+fit1 <- lm(price ~ car_name + year + A.C + emission_class + seats_amount + horsepower + color + 
+             car_mileage..km + engine_capacity..cc + type_of_drive + doors + fuel
+           + car_type + gearbox, data = data)
+
+## correlation matrix
+numeric <- cbind(data$horsepower,data$car_mileage..km,data$engine_capacity..cc)
+cor(numeric, use = "complete.obs")
+
+#VIF test
+X1=data$horsepower
+X2=data$car_mileage..km
+X3=data$engine_capacity..cc
+Y=data$price
+da <- na.omit(data[, c("price", "horsepower", "car_mileage..km", "engine_capacity..cc")])
+
+fit=lm(Y~X1+X2+X3, data = da)
+
+library(car)
+VIF=vif(fit)
+
+VIFbar=mean(VIF)
+VIFbar
+
+
+## Build model of main effects with interaction
+fit2 <- lm(price ~ car_name + year + A.C + emission_class + seats_amount + 
+             horsepower + color + car_mileage..km + engine_capacity..cc + 
+             type_of_drive + doors + fuel + car_type + gearbox + car_type:seats_amount
+           + emission_class:fuel + emission_class:car_type, data = data)
+anova(fit1, fit2)
+```
+
+All numerical variables are "car_mileage..km", "engine_capacity..cc", "horsepower". All categorical variables are "car_name", "year", "A.C", "seats_amount", "emission_class", "color", "type_of_drive", "doors", "fuel", "car_type", "gearbox".
+
+```{r}
+
+#install.packages("olsrr")
+#install.packages("ggpubr")
+library(olsrr)
+library(ggpubr)
+p1 <- ols_plot_resid_lev(fit2,threshold = qt(1 - alpha / (2 * n), n - 18 -1))
+p2 <- ols_plot_cooksd_chart(fit2)
+p3 <- ols_plot_dffits(fit2)
+p4 <- ols_plot_dfbetas(fit2)
+
+
+```
+
+```{r}
+### influential measures
+## n = 6684, p' = number of variables + number of interactions terms + 1 = 14 + 3 + 1 = 18
+
+## Studentized deleted residuals t_i
+t_i <- rstudent(fit2)
+alpha <- 0.05
+n <- 8355
+potential_outliers <- which(abs(t_i) > qt(1 - alpha / (2 * n), n - 18 -1))
+
+
+## Diagnostic for outlying X observation
+# Calculate leverage (hat values)
+leverage <- hatvalues(fit2)
+
+# Identify high leverage points by 0.5
+high_leverage_threshold <- 0.2
+high_leverage_points <- which(leverage > high_leverage_threshold)
+
+
+### influential observation
+## Compute DFFITS for the model
+dffits_values <- t_i * sqrt(leverage / (1 - leverage))
+
+# Calculate the threshold 
+dffits_threshold <- 2 * sqrt(18 / n)
+
+# Identify influential points
+influential_points_dif <- which(abs(dffits_values) > dffits_threshold)
+
+
+## Compute Cook's Distance for the model
+cooks_distances <- cooks.distance(fit2)
+
+# Calculate threshold
+cooks_threshold <- 4 / n
+
+# Identify influential points
+influential_points_cooks <- which(cooks_distances >cooks_threshold )
+
+
+## Compute DFBETAS
+dfbetas_values <- dfbetas(fit2)
+
+# Threshold
+threshold <- 2 / sqrt(n)
+
+# Find influential points for a specific coefficient (e.g., intercept)
+influential_points_debate <- which(abs(dfbetas_values[, "(Intercept)"]) > threshold)
+
+
+influ_result <- union(influential_points_cooks, influential_points_debate)
+
+```
+
+```{r}
+#delete the whole row if it is both outlier and leverage or it both leverage and influential point
+to_delete <- union(
+  intersect(influ_result, high_leverage_points), 
+  intersect(potential_outliers, high_leverage_points)
+)
+
+data <- data[-to_delete, ]
+
+out_lever <- intersect(potential_outliers, high_leverage_points)
+
+#the remaining of outlier 
+potential_outliers <- potential_outliers[!potential_outliers %in% out_lever]
+
+#Remove outliers that are too far out of line with the true market value.
+min_price <- 2000    
+max_price <- 50000
+p_o <- data[potential_outliers,]
+outlier_index <- which(p_o$price < min_price | p_o$price > max_price)
+data$price[outlier_index] <- NA
+
+#delete extreme higher leverage
+delete_ex_leverage <- which(leverage > 0.2)
+data <- data[-delete_ex_leverage,]
+
+#delete strong influential point
+
+delete_strong_influ=which(cooks_distances > 0.03)
+
+data <- data[-delete_strong_influ,]
+```
+
+```{r}
+#check 
+summary(fit2)$r.squared
+
+fit3 <- lm(price ~ car_name + year + A.C + emission_class + seats_amount + 
+             horsepower + color + car_mileage..km + engine_capacity..cc + 
+             type_of_drive + doors + fuel + car_type + gearbox + car_type:seats_amount
+           + emission_class:fuel + emission_class:car_type, data = data)
+
+summary(fit3)$r.squared
+```
+
+```{r}
+# Plot residual diagnostics and do the Shapiro-Wilk test
+par(mfrow = c(2, 2))
+## histogram
+hist(residuals(fit2))
+## residuals plot
+plot(fit2$fitted.values, residuals(fit2), xlab = "fit$fitted.values", ylab = 
+       "residuals(fit2)")
+abline(c(0,0), col = "red")
+## Normal probability plot
+qqnorm(residuals(fit2))
+qqline(residuals(fit2))
+```
+
+```{r}
+# Remove rows with missing values
+data_no_na <- na.omit(data)
+
+# Fit a null model (intercept only)
+null_model <- lm(price ~ 1, data = data_no_na)
+
+# Perform stepwise selection
+stepwise_model <- step(null_model, scope = list(lower = null_model, upper = fit3), 
+                       direction = "both")
+```
+
+price ~ year + horsepower + car_name + car_type + fuel + gearbox + 
+    car_mileage..km + type_of_drive + emission_class + seats_amount + 
+    A.C + car_type:emission_class + fuel:emission_class + car_type:seats_amount

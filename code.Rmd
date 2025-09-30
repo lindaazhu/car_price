@@ -1,0 +1,170 @@
+---
+title: "Untitled"
+author: "Jiayi Zhu"
+date: "2024-11-15"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r}
+full_data <- read.csv("/Users/zhujiayi/Desktop/car_data.csv", header = TRUE)
+
+# Proportion of data to sample
+prop <- 0.8
+
+# Number of samples to select
+n <- ceiling(prop * nrow(full_data))
+
+# Randomly sample
+set.seed(805)
+sample_indices <- sample(1:nrow(full_data), size = n, replace = FALSE)
+data <- full_data[sample_indices, ]
+
+data$car_name <- gsub(" .*", "", data$car_name)
+categorical_vars <- c("car_name", "year", "A.C", "emission_class", "seats_amount", "color", 
+                      "type_of_drive", "doors", "fuel", "car_type", "gearbox")
+data[categorical_vars] <- lapply(data[categorical_vars], as.factor)
+data$horsepower <- as.numeric(sub(" HP.*", "", data$horsepower))
+
+## Build model of main effects without interaction
+fit1 <- lm(price ~ car_name + year + A.C + emission_class + seats_amount + horsepower + color + 
+             car_mileage..km + engine_capacity..cc + type_of_drive + doors + fuel
+           + car_type + gearbox, data = data)
+
+## correlation matrix
+numeric <- cbind(data$horsepower,data$car_mileage..km,data$engine_capacity..cc)
+cor(numeric, use = "complete.obs")
+
+## Build model of main effects with interaction
+fit2 <- lm(price ~ car_name + year + A.C + emission_class + seats_amount + 
+             horsepower + color + car_mileage..km + engine_capacity..cc + 
+             type_of_drive + doors + fuel + car_type + gearbox + car_type:seats_amount
+           + emission_class:fuel + emission_class:car_type, data = data)
+anova(fit1, fit2)
+```
+All numerical variables are "car_mileage..km", "engine_capacity..cc", "horsepower". 
+All categorical variables are "car_name", "year", "A.C", "seats_amount", "emission_class", "color", 
+"type_of_drive", "doors", "fuel", "car_type", "gearbox".
+
+```{r}
+# Plot residual diagnostics and do the Shapiro-Wilk test
+par(mfrow = c(2, 2))
+## histogram
+hist(residuals(fit2))
+## residuals plot
+plot(fit2$fitted.values, residuals(fit2), xlab = "fit$fitted.values", ylab = 
+       "residuals(fit2)")
+abline(c(0,0), col = "pink")
+## Normal probability plot
+qqnorm(residuals(fit2))
+qqline(residuals(fit2))
+```
+
+```{r}
+# Remove rows with missing values
+clean_data <- na.omit(data)
+
+# Fit a null model (intercept only)
+null_model <- lm(price ~ 1, data = clean_data)
+
+# Perform stepwise selection
+stepwise_model <- step(null_model, scope = list(lower = null_model, upper = fit2), 
+                       direction = "both")
+```
+price ~ year + horsepower + car_name + car_type + type_of_drive + 
+    fuel + gearbox + car_mileage..km + seats_amount + emission_class + 
+    car_type:seats_amount + car_type:emission_class + fuel:emission_class
+
+
+```{r}
+### influential measures
+## n = 6684, p' = number of variables + number of interactions terms + 1 = 14 + 3 + 1 = 18
+
+# Compute studentized deleted residuals t_i
+t_i <- rstudent(fit2)
+
+## Studentized deleted residuals
+# Identify potential outliers
+alpha <- 0.05
+potential_outliers <- which(abs(t_i) > qt(1 - 2 * alpha / n, n - 18 -1))
+
+data[potential_outliers, ]
+
+## Diagnostic for outlying X observation
+# Calculate leverage (hat values)
+leverage <- hatvalues(fit2)
+
+# Identify high leverage points by 0.5
+high_leverage_threshold <- 0.5
+high_leverage_points <- which(leverage > high_leverage_threshold)
+
+data[high_leverage_points, ]
+```
+
+```{r}
+### influential observation
+## Compute DFFITS for the model
+dffits_values <- t_i * sqrt(leverage / (1 - leverage))
+
+# Calculate the threshold 
+dffits_threshold <- 2 * sqrt(18 / n)
+
+# Identify influential points
+influential_points <- which(abs(dffits_values) > dffits_threshold)
+
+# View influential points
+data[influential_points, ]
+
+# Plot DFFITS values
+plot(dffits_values, type = "h", ylab = "DFFITS", xlab = "Observation Index", 
+     main = "DFFITS for Influential Observations")
+abline(h = c(-dffits_threshold, dffits_threshold), col = "red", lty = 2)
+
+## Compute DFBETAS
+dfbetas_values <- dfbetas(fit2)
+
+# Threshold
+threshold <- 2 / sqrt(nrow(data))
+
+# Find influential points for a specific coefficient (e.g., intercept)
+influential_points <- which(abs(dfbetas_values[, "(Intercept)"]) > threshold)
+
+# View influential points
+data[influential_points, ]
+
+
+## Compute Cook's Distance for the model
+cooks_distances <- cooks.distance(fit2)
+
+# Calculate threshold
+cooks_threshold <- 4 / n
+
+# Identify influential points
+influential_points_cooks <- which(cooks_distances > cooks_threshold)
+
+# View influential points
+data[influential_points_cooks, ]
+
+# Plot Cook's Distance
+plot(cooks_distances, type = "h", ylab = "Cook's Distance", xlab = "Observation Index", 
+     main = "Cook's Distance for Influential Observations")
+abline(h = cooks_threshold, col = "red", lty = 2)
+
+# Highlight influential points
+points(influential_points_cooks, cooks_distances[influential_points_cooks], col = "blue", pch = 19)
+
+
+## Covariance ratio
+covratio_values <- covratio(fit2)
+
+# Thresholds --- p = p' - 1 = 18 - 1 = 17
+lower_threshold <- 1 - 3 * 17 / n
+upper_threshold <- 1 + 3 * 17 / n
+
+# Identify influential points
+influential_points_covratio <- which(covratio_values < lower_threshold | covratio_values > upper_threshold)
+
+# View influential points
+data[influential_points_covratio, ]
+```
